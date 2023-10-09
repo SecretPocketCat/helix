@@ -30,6 +30,7 @@ forth-lsp = { command = "forth-lsp" }
 fortls = { command = "fortls", args = ["--lowercase_intrinsics"] }
 fsharp-ls = { command = "fsautocomplete", config = { AutomaticWorkspaceInit = true } }
 gleam = { command = "gleam", args = ["lsp"] }
+graphql-language-service = { command = "graphql-lsp", args = ["server", "-m", "stream"] }
 haskell-language-server = { command = "haskell-language-server-wrapper", args = ["--lsp"] }
 idris2-lsp = { command = "idris2-lsp" }
 intelephense = { command = "intelephense", args = ["--stdio"] }
@@ -87,6 +88,9 @@ yaml-language-server = { command = "yaml-language-server", args = ["--stdio"] }
 zls = { command = "zls" }
 blueprint-compiler = { command = "blueprint-compiler", args = ["lsp"] }
 
+[language-server.ansible-language-server]
+command = "ansible-language-server"
+args = ["--stdio"]
 
 [language-server.lua-language-server]
 command = "lua-language-server" 
@@ -347,6 +351,22 @@ indent = { tab-width = 2, unit = "  " }
 [[grammar]]
 name = "json"
 source = { git = "https://github.com/tree-sitter/tree-sitter-json", rev = "73076754005a460947cafe8e03a8cf5fa4fa2938" }
+
+
+[[language]]
+name = "json5"
+scope = "source.json5"
+injection-regex = "json5"
+file-types = ["json5"]
+roots = []
+language-servers = []
+comment-token = "//"
+indent = { tab-width = 4, unit = "    " }
+# https://json5.org
+
+[[grammar]]
+name = "json5"
+source = { git = "https://github.com/Joakker/tree-sitter-json5", rev = "c23f7a9b1ee7d45f516496b1e0e4be067264fa0d" }
 
 [[language]]
 name = "c"
@@ -1055,7 +1075,7 @@ file-types = ["yml", "yaml"]
 roots = []
 comment-token = "#"
 indent = { tab-width = 2, unit = "  " }
-language-servers = [ "yaml-language-server" ]
+language-servers = [ "yaml-language-server", "ansible-language-server" ]
 injection-regex = "yml|yaml"
 
 [[grammar]]
@@ -1494,6 +1514,7 @@ scope = "source.graphql"
 injection-regex = "graphql"
 file-types = ["gql", "graphql", "graphqls"]
 roots = []
+language-servers = [ "graphql-language-service" ]
 indent = { tab-width = 2, unit = "  " }
 
 [[grammar]]
@@ -1767,7 +1788,7 @@ injection-regex = "sql"
 
 [[grammar]]
 name = "sql"
-source = { git = "https://github.com/DerekStride/tree-sitter-sql", rev = "7cbac0472e5b8f8486ce64ffbcf1982d5cd5fc8d" }
+source = { git = "https://github.com/DerekStride/tree-sitter-sql", rev = "eeab7240a11098724e6f95bc57cc3ceaf5487d5f" }
 
 [[language]]
 name = "gdscript"

@@ -59,7 +59,7 @@
 | gomod | ✓ |  |  | `gopls` |
 | gotmpl | ✓ |  |  | `gopls` |
 | gowork | ✓ |  |  | `gopls` |
-| graphql | ✓ |  |  |  |
+| graphql | ✓ |  |  | `graphql-lsp` |
 | hare | ✓ |  |  |  |
 | haskell | ✓ | ✓ |  | `haskell-language-server-wrapper` |
 | haskell-persistent | ✓ |  |  |  |
@@ -76,6 +76,7 @@
 | jinja | ✓ |  |  |  |
 | jsdoc | ✓ |  |  |  |
 | json | ✓ |  | ✓ | `vscode-json-language-server` |
+| json5 | ✓ |  |  |  |
 | jsonnet | ✓ |  |  | `jsonnet-language-server` |
 | jsx | ✓ | ✓ | ✓ | `typescript-language-server` |
 | julia | ✓ | ✓ | ✓ | `julia` |
@@ -178,6 +179,6 @@
 | wren | ✓ | ✓ | ✓ |  |
 | xit | ✓ |  |  |  |
 | xml | ✓ |  | ✓ |  |
-| yaml | ✓ |  | ✓ | `yaml-language-server` |
+| yaml | ✓ |  | ✓ | `yaml-language-server`, `ansible-language-server` |
 | yuck | ✓ |  |  |  |
 | zig | ✓ | ✓ | ✓ | `zls` |
