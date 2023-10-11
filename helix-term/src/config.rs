@@ -12,8 +12,12 @@ use toml::de::Error as TomlError;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     pub theme: Option<String>,
+    // todo: key might be smt. else?
+    pub theme_lang: HashMap<String, String>,
     pub keys: HashMap<Mode, KeyTrie>,
+    pub keys_lang: HashMap<String, HashMap<Mode, KeyTrie>>,
     pub editor: helix_view::editor::Config,
+    pub editor_lang: HashMap<String, helix_view::editor::Config>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -28,8 +32,11 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             theme: None,
+            theme_lang: HashMap::new(),
             keys: keymap::default(),
+            keys_lang: HashMap::new(),
             editor: helix_view::editor::Config::default(),
+            editor_lang: HashMap::new(),
         }
     }
 }
@@ -66,6 +73,16 @@ impl Config {
             local.and_then(|file| toml::from_str(&file).map_err(ConfigLoadError::BadConfig));
         let res = match (global_config, local_config) {
             (Ok(global), Ok(local)) => {
+                // todo: this seems to be the load config entry point,
+                // so changes might have to be made here
+                // but also the loaded config needs to have the specific lang configs available per lang
+                // so that those area avaibable whenever the config is actually requested
+                // and use the appropriate lang variant of the config
+                // maybe make the configs lang-based hashmaps
+                // though resolving those eagerly might be too much
+                // so look into resolving these lazily
+                // something like a lazy resolve against the global + locally merged configs should work?
+
                 let mut keys = keymap::default();
                 if let Some(global_keys) = global.keys {
                     merge_keys(&mut keys, global_keys)
@@ -88,6 +105,8 @@ impl Config {
                     theme: local.theme.or(global.theme),
                     keys,
                     editor,
+                    // todo: lang variants
+                    ..Default::default()
                 }
             }
             // if any configs are invalid return that first
@@ -107,6 +126,8 @@ impl Config {
                         || Ok(helix_view::editor::Config::default()),
                         |val| val.try_into().map_err(ConfigLoadError::BadConfig),
                     )?,
+                    // todo: lang variants
+                    ..Default::default()
                 }
             }
 

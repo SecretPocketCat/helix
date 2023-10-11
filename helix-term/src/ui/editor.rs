@@ -804,12 +804,15 @@ impl EditorView {
     ) -> Option<KeymapResult> {
         let mut last_mode = mode;
         self.pseudo_pending.extend(self.keymaps.pending());
-        let key_result = self.keymaps.get(mode, event);
+        let key_result = self
+            .keymaps
+            .get(mode, event, doc!(cxt.editor).language_id());
         cxt.editor.autoinfo = self.keymaps.sticky().map(|node| node.infobox());
 
         let mut execute_command = |command: &commands::MappableCommand| {
             command.execute(cxt);
             let current_mode = cxt.editor.mode();
+
             match (last_mode, current_mode) {
                 (Mode::Normal, Mode::Insert) => {
                     // HAXX: if we just entered insert mode from normal, clear key buf
@@ -869,9 +872,11 @@ impl EditorView {
                         match ev.char() {
                             Some(ch) => commands::insert::insert_char(cx, ch),
                             None => {
-                                if let KeymapResult::Matched(command) =
-                                    self.keymaps.get(Mode::Insert, ev)
-                                {
+                                if let KeymapResult::Matched(command) = self.keymaps.get(
+                                    Mode::Insert,
+                                    ev,
+                                    doc!(cx.editor).language_id(),
+                                ) {
                                     command.execute(cx);
                                 }
                             }

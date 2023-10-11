@@ -274,6 +274,7 @@ pub type ReverseKeymap = HashMap<String, Vec<Vec<KeyEvent>>>;
 
 pub struct Keymaps {
     pub map: Box<dyn DynAccess<HashMap<Mode, KeyTrie>>>,
+    pub lang_map: Box<dyn DynAccess<HashMap<String, HashMap<Mode, KeyTrie>>>>,
     /// Stores pending keys waiting for the next key. This is relative to a
     /// sticky node if one is in use.
     state: Vec<KeyEvent>,
@@ -282,9 +283,13 @@ pub struct Keymaps {
 }
 
 impl Keymaps {
-    pub fn new(map: Box<dyn DynAccess<HashMap<Mode, KeyTrie>>>) -> Self {
+    pub fn new(
+        map: Box<dyn DynAccess<HashMap<Mode, KeyTrie>>>,
+        lang_map: Box<dyn DynAccess<HashMap<String, HashMap<Mode, KeyTrie>>>>,
+    ) -> Self {
         Self {
             map,
+            lang_map,
             state: Vec::new(),
             sticky: None,
         }
@@ -292,6 +297,10 @@ impl Keymaps {
 
     pub fn map(&self) -> DynGuard<HashMap<Mode, KeyTrie>> {
         self.map.load()
+    }
+
+    pub fn lang_map(&self) -> DynGuard<HashMap<String, HashMap<Mode, KeyTrie>>> {
+        self.lang_map.load()
     }
 
     /// Returns list of keys waiting to be disambiguated in current mode.
@@ -306,11 +315,8 @@ impl Keymaps {
     /// Lookup `key` in the keymap to try and find a command to execute. Escape
     /// key cancels pending keystrokes. If there are no pending keystrokes but a
     /// sticky node is in use, it will be cleared.
-    pub fn get(&mut self, mode: Mode, key: KeyEvent) -> KeymapResult {
+    pub fn get(&mut self, mode: Mode, key: KeyEvent, lang_id: Option<&str>) -> KeymapResult {
         // TODO: remove the sticky part and look up manually
-        let keymaps = &*self.map();
-        let keymap = &keymaps[&mode];
-
         if key!(Esc) == key {
             if !self.state.is_empty() {
                 // Note that Esc is not included here
@@ -320,12 +326,22 @@ impl Keymaps {
         }
 
         let first = self.state.get(0).unwrap_or(&key);
-        let trie_node = match self.sticky {
-            Some(ref trie) => Cow::Owned(KeyTrie::Node(trie.clone())),
-            None => Cow::Borrowed(keymap),
-        };
+        let keys = &[*first];
+        let keymap = &self.map()[&mode];
 
-        let trie = match trie_node.search(&[*first]) {
+        let lang_map = self.lang_map();
+        let lang_keymaps: Option<_> = lang_id
+            .and_then(|lang_id| lang_map.get(lang_id))
+            .and_then(|m| m.get(&mode));
+
+        let node = self.sticky.clone().map(KeyTrie::Node);
+        let trie_node = node.as_ref().and_then(|n| n.search(keys)).or_else(|| {
+            lang_keymaps
+                .and_then(|lang_keymap| lang_keymap.search(keys))
+                .or_else(|| keymap.search(keys))
+        });
+
+        let trie = match trie_node {
             Some(KeyTrie::MappableCommand(ref cmd)) => {
                 return KeymapResult::Matched(cmd.clone());
             }
@@ -360,7 +376,10 @@ impl Keymaps {
 
 impl Default for Keymaps {
     fn default() -> Self {
-        Self::new(Box::new(ArcSwap::new(Arc::new(default()))))
+        Self::new(
+            Box::new(ArcSwap::new(Arc::new(default()))),
+            Box::new(ArcSwap::new(Arc::new(HashMap::new()))),
+        )
     }
 }
 
@@ -414,20 +433,23 @@ mod tests {
         merge_keys(&mut merged_keyamp, keymap.clone());
         assert_ne!(keymap, merged_keyamp);
 
-        let mut keymap = Keymaps::new(Box::new(Constant(merged_keyamp.clone())));
+        let mut keymap = Keymaps::new(
+            Box::new(Constant(merged_keyamp.clone())),
+            Box::new(Constant(HashMap::new())),
+        );
         assert_eq!(
-            keymap.get(Mode::Normal, key!('i')),
+            keymap.get(Mode::Normal, key!('i'), None),
             KeymapResult::Matched(MappableCommand::normal_mode),
             "Leaf should replace leaf"
         );
         assert_eq!(
-            keymap.get(Mode::Normal, key!('无')),
+            keymap.get(Mode::Normal, key!('无'), None),
             KeymapResult::Matched(MappableCommand::insert_mode),
             "New leaf should be present in merged keymap"
         );
         // Assumes that z is a node in the default keymap
         assert_eq!(
-            keymap.get(Mode::Normal, key!('z')),
+            keymap.get(Mode::Normal, key!('z'), None),
             KeymapResult::Matched(MappableCommand::jump_backward),
             "Leaf should replace node"
         );
