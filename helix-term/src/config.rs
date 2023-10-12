@@ -3,7 +3,7 @@ use crate::keymap::{merge_keys, KeyTrie};
 use helix_loader::merge_toml_values;
 use helix_view::document::Mode;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::fs;
 use std::io::Error as IOError;
@@ -23,6 +23,16 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigRaw {
+    pub theme: Option<String>,
+    pub keys: Option<HashMap<Mode, KeyTrie>>,
+    pub editor: Option<toml::Value>,
+    pub languages: Option<Vec<LanguageConfigRaw>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LanguageConfigRaw {
+    pub name: String,
     pub theme: Option<String>,
     pub keys: Option<HashMap<Mode, KeyTrie>>,
     pub editor: Option<toml::Value>,
@@ -71,42 +81,29 @@ impl Config {
             global.and_then(|file| toml::from_str(&file).map_err(ConfigLoadError::BadConfig));
         let local_config: Result<ConfigRaw, ConfigLoadError> =
             local.and_then(|file| toml::from_str(&file).map_err(ConfigLoadError::BadConfig));
+
         let res = match (global_config, local_config) {
-            (Ok(global), Ok(local)) => {
-                // todo: this seems to be the load config entry point,
-                // so changes might have to be made here
-                // but also the loaded config needs to have the specific lang configs available per lang
-                // so that those area avaibable whenever the config is actually requested
-                // and use the appropriate lang variant of the config
-                // maybe make the configs lang-based hashmaps
-                // though resolving those eagerly might be too much
-                // so look into resolving these lazily
-                // something like a lazy resolve against the global + locally merged configs should work?
+            (Ok(mut global), Ok(mut local)) => {
+                let keys = Self::merge_config_keys(keymap::default(), global.keys, local.keys);
 
-                let mut keys = keymap::default();
-                if let Some(global_keys) = global.keys {
-                    merge_keys(&mut keys, global_keys)
-                }
-                if let Some(local_keys) = local.keys {
-                    merge_keys(&mut keys, local_keys)
-                }
+                let editor_value = Self::merge_editor_toml(global.editor, local.editor);
 
-                let editor = match (global.editor, local.editor) {
-                    (None, None) => helix_view::editor::Config::default(),
-                    (None, Some(val)) | (Some(val), None) => {
-                        val.try_into().map_err(ConfigLoadError::BadConfig)?
-                    }
-                    (Some(global), Some(local)) => merge_toml_values(global, local, 3)
-                        .try_into()
-                        .map_err(ConfigLoadError::BadConfig)?,
-                };
+                let (theme_lang, keys_lang, editor_lang) = Self::get_lang_maps(
+                    Self::get_lang_config_map(global.languages.take()),
+                    Self::get_lang_config_map(local.languages.take()),
+                    &keys,
+                    &editor_value,
+                )?;
+
+                let editor = Self::map_editor_config(editor_value)?;
 
                 Config {
                     theme: local.theme.or(global.theme),
                     keys,
                     editor,
-                    // todo: lang variants
-                    ..Default::default()
+                    theme_lang,
+                    keys_lang,
+                    editor_lang,
                 }
             }
             // if any configs are invalid return that first
@@ -114,20 +111,25 @@ impl Config {
             | (Err(ConfigLoadError::BadConfig(err)), _) => {
                 return Err(ConfigLoadError::BadConfig(err))
             }
-            (Ok(config), Err(_)) | (Err(_), Ok(config)) => {
-                let mut keys = keymap::default();
-                if let Some(keymap) = config.keys {
-                    merge_keys(&mut keys, keymap);
-                }
+            (Ok(mut config), Err(_)) | (Err(_), Ok(mut config)) => {
+                let keys = Self::merge_config_keys(keymap::default(), config.keys, None);
+
+                let (theme_lang, keys_lang, editor_lang) = Self::get_lang_maps(
+                    Self::get_lang_config_map(config.languages.take()),
+                    HashMap::new(),
+                    &keys,
+                    &config.editor,
+                )?;
+
+                let editor = Self::map_editor_config(config.editor)?;
+
                 Config {
                     theme: config.theme,
                     keys,
-                    editor: config.editor.map_or_else(
-                        || Ok(helix_view::editor::Config::default()),
-                        |val| val.try_into().map_err(ConfigLoadError::BadConfig),
-                    )?,
-                    // todo: lang variants
-                    ..Default::default()
+                    editor,
+                    theme_lang,
+                    keys_lang,
+                    editor_lang,
                 }
             }
 
@@ -136,6 +138,149 @@ impl Config {
         };
 
         Ok(res)
+    }
+
+    fn get_lang_config_map(
+        languages: Option<Vec<LanguageConfigRaw>>,
+    ) -> HashMap<String, LanguageConfigRaw> {
+        languages.map_or_else(
+            || HashMap::new(),
+            |languages| {
+                languages
+                    .into_iter()
+                    .map(|lang| (lang.name.clone(), lang))
+                    .collect()
+            },
+        )
+    }
+
+    fn get_lang_maps(
+        mut lang_global: HashMap<String, LanguageConfigRaw>,
+        mut lang_local: HashMap<String, LanguageConfigRaw>,
+        merged_keys: &HashMap<Mode, KeyTrie>,
+        editor_value: &Option<toml::Value>,
+    ) -> Result<
+        (
+            HashMap<String, String>,
+            HashMap<String, HashMap<Mode, KeyTrie>>,
+            HashMap<String, helix_view::editor::Config>,
+        ),
+        ConfigLoadError,
+    > {
+        let mut theme_lang = HashMap::new();
+        let mut keys_lang = HashMap::new();
+        let mut editor_lang = HashMap::new();
+
+        let language_names: HashSet<String> = lang_global
+            .keys()
+            .chain(lang_local.keys())
+            .cloned()
+            .collect();
+
+        for lang in language_names {
+            let (mut theme, mut keys, mut editor) =
+                match (lang_global.get_mut(&lang), lang_local.get_mut(&lang)) {
+                    (None, Some(lang_conf)) | (Some(lang_conf), None) => {
+                        let keys = lang_conf
+                            .keys
+                            .take()
+                            .map(|k| Self::merge_config_keys(merged_keys.clone(), Some(k), None));
+
+                        let editor = if lang_conf.editor.is_some() {
+                            Some(Self::map_editor_config(Self::merge_editor_toml(
+                                editor_value.clone(),
+                                lang_conf.editor.take(),
+                            ))?)
+                        } else {
+                            None
+                        };
+
+                        (lang_conf.theme.take(), keys, editor)
+                    }
+                    (Some(lang_global), Some(lang_local)) => {
+                        let keys = if lang_global.keys.is_some() || lang_local.keys.is_some() {
+                            Some(Self::merge_config_keys(
+                                merged_keys.clone(),
+                                lang_global.keys.take(),
+                                lang_local.keys.take(),
+                            ))
+                        } else {
+                            None
+                        };
+
+                        let editor = if lang_global.editor.is_some() || lang_local.editor.is_some()
+                        {
+                            Some(Self::map_editor_config(Self::merge_editor_toml(
+                                editor_value.clone(),
+                                Self::merge_editor_toml(
+                                    lang_global.editor.take(),
+                                    lang_local.editor.take(),
+                                ),
+                            ))?)
+                        } else {
+                            None
+                        };
+
+                        (
+                            lang_local.theme.take().or(lang_global.theme.take()),
+                            keys,
+                            editor,
+                        )
+                    }
+                    (..) => (None, None, None),
+                };
+
+            if let Some(theme) = theme.take() {
+                theme_lang.insert(lang.clone(), theme);
+            }
+
+            if let Some(keys) = keys.take() {
+                keys_lang.insert(lang.clone(), keys);
+            }
+
+            if let Some(editor) = editor.take() {
+                editor_lang.insert(lang, editor);
+            }
+        }
+
+        Ok((theme_lang, keys_lang, editor_lang))
+    }
+
+    fn merge_config_keys(
+        mut dst: HashMap<Mode, KeyTrie>,
+        global_keys: Option<HashMap<Mode, KeyTrie>>,
+        local_keys: Option<HashMap<Mode, KeyTrie>>,
+    ) -> HashMap<Mode, KeyTrie> {
+        if let Some(global_keys) = global_keys {
+            merge_keys(&mut dst, global_keys)
+        }
+        if let Some(local_keys) = local_keys {
+            merge_keys(&mut dst, local_keys)
+        }
+
+        dst
+    }
+
+    fn merge_editor_toml(
+        global_editor: Option<toml::Value>,
+        local_editor: Option<toml::Value>,
+    ) -> Option<toml::Value> {
+        match (global_editor, local_editor) {
+            (None, None) => None,
+            (None, Some(val)) | (Some(val), None) => Some(val),
+            (Some(global), Some(local)) => Some(merge_toml_values(global, local, 3)),
+        }
+    }
+
+    fn map_editor_config(
+        editor_value: Option<toml::Value>,
+    ) -> Result<helix_view::editor::Config, ConfigLoadError> {
+        let editor = match editor_value {
+            None => helix_view::editor::Config::default(),
+            Some(val) => val.try_into().map_err(ConfigLoadError::BadConfig)?,
+        };
+
+        Ok(editor)
     }
 
     pub fn load_default() -> Result<Config, ConfigLoadError> {
